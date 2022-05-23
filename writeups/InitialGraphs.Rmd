@@ -1,0 +1,677 @@
+---
+title: "Plant functional group composition and vegetation structure at CGREC"
+author: DAM
+date: '`r Sys.Date()`'
+output: 
+  html_document:
+    theme: united
+    highlight: tango
+    toc: TRUE
+---
+
+```{r setup, echo=FALSE, warning=FALSE, message = FALSE, results='hide'}
+knitr::opts_chunk$set(message = FALSE, warning=FALSE, 
+                      echo=FALSE, eval=TRUE) 
+# fig.path='../figures/', dev=c('png', 'pdf')
+# Packages 
+  pacman::p_load(tidyverse, vegan, RVAideMemoire)
+  pacman::p_load_gh('devanmcg/wesanderson')
+  source("https://raw.githubusercontent.com/devanmcg/IntroRangeR/master/11_IntroMultivariate/ordinationsGGplot.R")
+```
+
+
+```{r data_loading}
+# Load and arrange data 
+veg_all <-
+  read_csv('../data/CGRECVegCompCameron.csv') %>% 
+    mutate(block = substr(transect, 1,1), 
+           pasture = substr(transect, 2,3), 
+           patch = substr(transect, 4,5), 
+           subpatch = substr(transect, 6,6), 
+           transect = paste(block, pasture, patch, subpatch, sep = "."), 
+           pasture = paste(block, pasture, sep = "_")) %>%
+    select(block, pasture, patch, subpatch, transect, 
+           TRT, year, TSF, BurnSeason, 
+           Bare:LitterDepth, 
+           POPR:IntWoody) %>%
+    mutate( TRT = factor(TRT, levels = c("PBG40", "PBG20", "SLG", "WAG")), 
+            TRT = recode(TRT, 
+                        "PBG40" = "1 burns/yr", 
+                        "PBG20" = '2 burn/yr',
+                        "SLG" = "Continuous", 
+                        "WAG" = "Rotational") )
+# Alternatively, with relative dominance
+veg_ra <- 
+  veg_all %>%
+  rowwise() %>%
+  mutate(TotalCover = sum(c_across(POPR:IntWoody)), 
+         across(POPR:IntWoody, ~((./TotalCover)*100))) %>%
+  ungroup() %>%
+  filter(TotalCover != 0.0) %>%
+  select(-TotalCover) 
+
+# Patch contrast 
+  load('../data/contrastVOR.Rdata')
+```
+
+```{r data_prep_univariate}
+# Each variable by treatment over study timeframe 
+veg_univ <-
+  veg_ra %>%
+    select(block, pasture, patch, subpatch, transect, 
+           TRT, year, Bare:IntWoody) %>%
+    pivot_longer(cols = c(Bare:IntWoody), 
+                 names_to = "spp", 
+                 values_to = "cover") %>%
+    group_by(TRT, pasture, year, spp) %>%
+      summarize(Mean = mean(cover), 
+                .groups = 'drop') %>%
+    group_by(TRT, year, spp) %>%
+    summarize(CoverMean = mean(Mean), 
+              CoverSE = sd(Mean)/sqrt(n()), 
+              .groups = 'drop') %>%
+    rename("Management" = "TRT") %>%
+  # filter(! spp %in% c('IntC4', 'IntWoody')) %>%
+    mutate(group = case_when(
+      spp %in% c('Bare', 'Dead', 'Robel', 'LitterDepth') ~ "Structural", 
+      spp %in% c('POPR', 'BRIN') ~ "Focal", 
+      TRUE ~ "Functional" )) %>%
+    mutate(status = case_when(
+      substr(spp, 1,3) == "Nat" ~ "Native",
+      substr(spp, 1,3) == "Int" ~ "Exotic",
+      TRUE ~ 'NA' )) %>%
+  mutate(spp = recode(spp,
+    "Bare" = "Bare ground", 
+    'BRIN' = "Bromus inermis", 
+    'Dead' = "Litter cover", 
+    'IntC3' = 'Cool-season\ngrasses', 
+    'IntForb' = 'Forbs', 
+    'Intleg' ="Legumes", 
+    'LitterDepth' = 'Litter depth', 
+    'NatC3' = 'Cool-season\ngrasses', 
+    'IntC4' = 'Warm-season\ngrasses', 
+    'NatC4' = 'Warm-season\ngrasses', 
+    'NatForb' = 'Forbs', 
+    'Natleg' = 'Legumes', 
+    'NatWoody' = "Woody\nplants", 
+    'IntWoody' = "Woody\nplants", 
+    'POPR' = "Poa pratensis", 
+    'Robel' = 'Robel height'  ))
+```
+
+# Key take-aways 
+
+* Initial composition across treatment groups was not consistent. 
+The Refuge pastures that were assigned to continuous grazing without fire had substantially more smooth brome and fewer native forbs and legumes. 
+
+* Few plant functional groups showed trends that can reasonably be attributed to management. 
+These are limited to increased native forbs and cool-season grasses on PBG pastures.
+Only PBG pastures showed consistent trends over time in terms of overall community composition. 
+
+* Overall plant functional group diversity (beta diversity w/in treatment groups) was unaffected by management, which was unexpected. 
+
+* Several structural variables followed expectations. 
+Spatially-patchy fire increased both bare ground and litter on PBG pastures. 
+Continuous grazing without fire accummulated litter. 
+
+* Initially, spatial heterogeneity in vegetation structure was consistent across all pastures (low). 
+Over time, conducting 40-ac patch burns increased patch contrast, as did rotational grazing. 
+
+
+# Plant functional group composition & vegetation structure 
+
+## Univariate trends--year by year
+
+Tracking each response variable by treatment over the time period of the study. 
+
+### Smooth brome and Kentucky bluegrass
+
+```{r CSG_gg, fig.width=8, fig.height=3.5}
+# POPR & BRIN  
+  veg_univ %>%
+    filter(group == 'Focal') %>%
+    ggplot(aes(x = year)) + theme_bw(16) +
+      geom_line(aes(y = CoverMean, 
+                    color = Management), 
+                position = position_dodge(width = 0.3)) +
+      geom_errorbar(aes(ymin = CoverMean - CoverSE, 
+                        ymax = CoverMean + CoverSE, 
+                        color = Management), 
+                    width = 0.25,
+                    position = position_dodge(width = 0.3)) +
+      geom_point(aes(y = CoverMean, 
+                     fill = Management, 
+                     shape = Management),
+                 position = position_dodge(width = 0.3)) +
+    labs(y = "Relative abundance\n(mean % ± s.e.)") +
+    scale_shape_manual(values = c(21:24)) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+      facet_wrap(~spp, scales = "free_y") + 
+    theme(strip.text = element_text(face = "italic"), 
+          panel.grid.minor.x = element_blank())
+```
+
+Smooth brome was obviously disproportionately abundant on the Refuge pastures, 2-3x more abundant than other pastures. 
+No evidence of change across any management type through study period. 
+Kentucky bluegrass was generally about the same across all pastures and showed little change over the course of the study period. 
+
+### Plant functional groups 
+
+```{r funct_gg, fig.width=10}
+# Functional groups
+  veg_univ %>%
+    filter(group == 'Functional') %>%
+    mutate(spp = factor(spp, levels = c("Forbs", "Legumes", 
+                                        "Cool-season\ngrasses", 
+                                        "Warm-season\ngrasses", 
+                                        "Woody\nplants"))) %>% 
+    ggplot(aes(x = year)) + theme_bw(18) +
+    geom_line(aes(y = CoverMean, 
+                  color = Management), 
+              position = position_dodge(width = 0.3)) +
+    geom_errorbar(aes(ymin = CoverMean - CoverSE, 
+                      ymax = CoverMean + CoverSE, 
+                      color = Management), 
+                  width = 0.25,
+                  position = position_dodge(width = 0.3)) +
+    geom_point(aes(y = CoverMean, 
+                   fill = Management, 
+                   shape = Management),
+               position = position_dodge(width = 0.3)) +
+    labs(y = "Relative abundance\n(mean % ± s.e.)") +
+    scale_shape_manual(values = c(21:24)) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+    facet_grid(status~spp, scales = "free_y") +
+    theme(axis.text.x = element_text(angle = 33, hjust = 1), 
+          panel.grid.minor.x = element_blank())
+```
+
+Native forbs and legumes were markedly lower in the Refuge than other management types, which were not terribly different from each other outside of the Refuge. 
+The Wagon Wheel was consistently higher in native woody plants. 
+
+Few functional groups changed over the course of the study period. 
+2019-2020 changes seem isolated and are likely attributable to precipitation (overall lower productivity in 2020). 
+
+The increase in native cool-season grasses in PBG pastures is consistent with, and reflected in, the ordination as well. 
+This is probably a real treatment effect. 
+
+### Vegetation structure
+
+```{r struct_gg, fig.width=8}
+# Vegetation structure
+  veg_univ %>%
+    filter(group == 'Structural') %>%
+    mutate(spp = case_when(
+      spp %in% c("Bare ground", "Litter cover") ~ paste(spp, "(%)"), 
+      spp == 'Litter depth' ~ paste(spp, "(mm)"), 
+      spp == 'Robel height' ~ paste(spp, "(dm)")
+    )) %>%
+    ggplot(aes(x = year)) + theme_bw(16) +
+    geom_line(aes(y = CoverMean, 
+                  color = Management), 
+              position = position_dodge(width = 0.3)) +
+    geom_errorbar(aes(ymin = CoverMean - CoverSE, 
+                      ymax = CoverMean + CoverSE, 
+                      color = Management), 
+                  width = 0.25,
+                  position = position_dodge(width = 0.3)) +
+    geom_point(aes(y = CoverMean, 
+                   fill = Management, 
+                   shape = Management),
+               position = position_dodge(width = 0.3)) +
+  labs(y = "Mean ± s.e.") +
+    scale_shape_manual(values = c(21:24)) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+    facet_wrap(~spp, scales = "free_y") +
+  theme( panel.grid.minor.x = element_blank())
+```
+
+Increases in both litter and bare ground on PBG pastures is only possible with patchy fire, and can be interpreted as a treatment effect. 
+Likewise, increasing litter cover & depth on the Refuge is an expected result, and probably for rotational pastures, as well. 
+
+## Changes over study period 
+
+Comparing final to initial values for each measured variable.
+Not sure how insightful these data are, given the influence of the 2020 drought. 
+Hard to attribute any reductions, especially, to management. 
+
+```{r}
+# Calculating changes
+veg_ch <-
+  veg_ra  %>%   
+    mutate(bookend = case_when(
+      TRT == "Rotational" & year == '2018' ~ "Initial", 
+      TRT != "Rotational" & year == '2017' ~ "Initial", 
+      year == '2020' ~ "Final", 
+      TRUE ~ 'NA'      )) %>% 
+    filter(bookend %in% c("Initial", "Final")) %>%
+  select(block, pasture, transect, 
+         TRT, bookend, Bare:IntWoody) %>%
+  pivot_longer(cols = c(Bare:IntWoody), 
+               names_to = "var", 
+               values_to = "value") %>%
+  pivot_wider(names_from = bookend, 
+              values_from = value) %>%
+    mutate(diff = Final - Initial) %>%
+  group_by(TRT, pasture, var) %>%
+  summarize(change = mean(diff), 
+            .groups = 'drop') %>%
+  group_by(TRT, var) %>%
+  summarize(ChangeMean = mean(change, na.rm = T), 
+            ChangeSE = sd(change, na.rm = T)/sqrt(n()), 
+            .groups = 'drop') %>%
+  rename("Management" = "TRT") %>% 
+    mutate(group = case_when(
+      var %in% c('Bare', 'Dead', 'Robel', 'LitterDepth') ~ "Structural", 
+      var %in% c('POPR', 'BRIN') ~ "Focal", 
+      TRUE ~ "Functional" )) %>%
+    mutate(status = case_when(
+      substr(var, 1,3) == "Nat" ~ "Native",
+      substr(var, 1,3) == "Int" ~ "Exotic",
+      TRUE ~ 'NA' )) %>%
+    mutate(var = recode(var,
+                        "Bare" = "Bare ground", 
+                        'BRIN' = "Bromus inermis", 
+                        'Dead' = "Litter cover", 
+                        'IntC3' = 'Cool-season\ngrasses', 
+                        'IntForb' = 'Forbs', 
+                        'Intleg' ="Legumes", 
+                        'LitterDepth' = 'Litter depth', 
+                        'NatC3' = 'Cool-season\ngrasses', 
+                        'IntC4' = 'Warm-season\ngrasses', 
+                        'NatC4' = 'Warm-season\ngrasses', 
+                        'NatForb' = 'Forbs', 
+                        'Natleg' = 'Legumes', 
+                        'NatWoody' = "Woody\nplants", 
+                        'IntWoody' = "Woody\nplants", 
+                        'POPR' = "Poa pratensis", 
+                        'Robel' = 'Robel height'  ))
+```
+
+### Smooth brome and Kentucky bluegrass 
+
+```{r focal_ch_gg, fig.height = 4}
+# POPR & BRIN  
+veg_ch %>%
+  filter(group == 'Focal') %>%
+  ggplot(aes(x = var)) + theme_bw(16) +
+  geom_hline(yintercept = 0, lty = 3, col = "black") + 
+  geom_errorbar(aes(ymin = ChangeMean - ChangeSE, 
+                    ymax = ChangeMean + ChangeSE, 
+                    color = Management), 
+                width = 0.25,
+                position = position_dodge(width = 0.3)) +
+  geom_point(aes(y = ChangeMean, 
+                 fill = Management, 
+                 shape = Management),
+             position = position_dodge(width = 0.3)) +
+  scale_shape_manual(values = c(21:24)) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  labs(x = "Species", 
+       y = "Change over study\n(mean % ± s.e.)") + 
+  theme(axis.text.x = element_text(face = "italic"))
+``` 
+
+### Plant functional groups
+
+```{r funct_ch_gg}
+# FUnctional groups
+veg_ch %>%
+  filter(group == 'Functional') %>%
+  mutate(spp = factor(var, levels = c("Forbs", "Legumes", 
+                                      "Cool-season\ngrasses", 
+                                      "Warm-season\ngrasses", 
+                                      "Woody\nplants"))) %>% 
+  ggplot(aes(x = var)) + theme_bw(14) +
+  geom_hline(yintercept = 0, lty = 3, col = "black") + 
+  geom_errorbar(aes(ymin = ChangeMean - ChangeSE, 
+                    ymax = ChangeMean + ChangeSE, 
+                    color = Management), 
+                width = 0.25,
+                position = position_dodge(width = 0.3)) +
+  geom_point(aes(y = ChangeMean, 
+                 fill = Management, 
+                 shape = Management),
+             position = position_dodge(width = 0.3)) +
+  scale_shape_manual(values = c(21:24)) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  labs(x = "Plant functional group", 
+       y = "Change over study\n(mean % ± s.e.)") +
+  facet_wrap(~status, scales = "free_y", ncol = 1) 
+```
+
+### Vegetation structure 
+
+```{r struct_ch_gg, fig.height = 4} 
+# Vegetation structure
+veg_ch %>%
+  filter(group == 'Structural') %>%
+  ggplot(aes(x = var)) + theme_bw(16) +
+  geom_hline(yintercept = 0, lty = 3, col = "black") + 
+  geom_errorbar(aes(ymin = ChangeMean - ChangeSE, 
+                    ymax = ChangeMean + ChangeSE, 
+                    color = Management), 
+                width = 0.25,
+                position = position_dodge(width = 0.3)) +
+  geom_point(aes(y = ChangeMean, 
+                 fill = Management, 
+                 shape = Management),
+             position = position_dodge(width = 0.3)) +
+  scale_shape_manual(values = c(21:24)) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  labs(x = "Structural component", 
+       y = "Change over study\n(mean ± s.e.)")
+```
+
+## Multivariate analyses
+
+### Community dissimilarity
+
+```{r mv_data_rep, message }
+# Multivariate analysis
+  # Focus on first and final years (2018 & 2020)
+    veg_d <- 
+      veg_all %>%
+      mutate(bookend = case_when(
+              TRT == "Rotational" & year == '2018' ~ "Initial", 
+              TRT != "Rotational" & year == '2017' ~ "Initial", 
+              year == '2020' ~ "Final", 
+              TRUE ~ 'NA'      )) %>% 
+        filter(bookend %in% c("Initial", "Final")) %>%
+      mutate(YrTrt = paste0(bookend,"_", TRT))
+  # spp data only
+    comm_d <- 
+      veg_d %>%
+      select(NatC3:IntWoody)  %>%
+      select(-IntWoody, -IntC4) %>%
+      replace(is.na(.), 0) 
+  # Calculate distance matrix
+    veg_m <- vegdist(comm_d, "bray")
+ # perform ordination
+    # Fit 
+   veg_ord <- suppressMessages(
+                capscale(comm_d ~ 1, distance = 'bray', 
+                         metaMDSdist = TRUE, trace=FALSE)
+                  )
+   # Test groups
+     veg_fit <- envfit(veg_ord ~ YrTrt + Bare + Dead + Robel + 
+                         LitterDepth + POPR + BRIN, 
+                       veg_d, strata = veg_d$block, 
+                       choices = c(1:3), 199)
+     pw <- pairwise.factorfit(veg_ord, veg_d$YrTrt, 
+                              perm = 199, p.method = "holm" )$p.value %>%
+            round(., 2)
+     bd <- betadisper(veg_m, veg_d$YrTrt, bias.adjust=TRUE  )
+
+  # Getting scores 
+  veg_gg <- gg_ordiplot(veg_ord, groups = veg_d$YrTrt, 
+                         plot=FALSE)
+  veg_scores <- lst(species=scores(veg_ord, display = "species", 
+                                   choices = c(1:2)) %>%
+                            as.data.frame %>%
+                            as_tibble(rownames="group"), 
+                    sites=scores(veg_ord, display = "sites", 
+                                 choices = c(1:2)) %>%
+                      as_tibble() %>%
+                      bind_cols(YrTrt = veg_d$YrTrt) %>%
+                      separate(YrTrt, into=c('bookend', 'Trt'), 
+                               sep = "_", remove = F) %>%
+                      mutate(bookend = factor(bookend, 
+                                              levels = c("Initial", "Final"))), 
+                    spiders = veg_gg$df_spiders %>% 
+                           rename(MDS1 = x, MDS2 = y) %>%
+                           as_tibble %>%
+                           separate(Group, into=c('bookend', 'Trt'), 
+                                    sep = "_", remove = F) %>%
+                      mutate(bookend = factor(bookend, 
+                                              levels = c("Initial", "Final"))), 
+                    vectors = scores(veg_fit,  "vectors") %>%
+                              as.data.frame %>% 
+                              round(3) %>%
+                              as_tibble(rownames="gradient"), 
+                    groups = pw, 
+                    beta = bd$distances)
+```
+
+***Ordination results.--***
+Very slight changes are apparent among groups and over time in ordination space. 
+Continuously-grazed pastures appear the most widely distributed at the beginning of the study, with several pastures associated with Native Woody Plants; the group contracts in the final period of the study. 
+Unburned treatments (rotationally-grazed and continuously-grazed pastures) converge in ordination space, while both PBG treatments appear similar to each other in both timesteps and appear to move along a gradient towards grater native plant groups. 
+
+```{r ord_gg, fig.height= 4, fig.width=8}  
+# Plot ordination 
+  ord_gg <- ggplot() + theme_bw(16) + 
+    labs(x="MDS Axis 1", 
+         y="MDS Axis 2") + 
+    geom_vline(xintercept = 0, lty=3, color="darkgrey") +
+    geom_hline(yintercept = 0, lty=3, color="darkgrey") +
+    theme(panel.grid=element_blank())
+ ord_gg + 
+    geom_segment(data=veg_scores$spiders, 
+                 aes(x=cntr.x, y=cntr.y,
+                     xend=MDS1, yend=MDS2, 
+                     color=Trt), 
+                 alpha = 0.5,
+                 size=1.2) + 
+    geom_point(data=veg_scores$spiders, 
+               aes(x=MDS1, y=MDS2,
+                   fill = Trt, 
+                   shape = Trt), 
+               size=2) +
+    geom_label(data=veg_scores$spiders ,
+               aes(x=cntr.x, y=cntr.y, 
+                   label=Trt, 
+                   color=Trt), 
+               fontface="bold", size=4,
+               label.size = 0, 
+               label.r = unit(0.5, "lines")) +
+    geom_label(data=veg_scores$species %>%
+                 filter(! group %in% c("IntWoody", "IntC4")), 
+               aes(x=MDS1*0.225, 
+                   y=MDS2*0.225, 
+                   label=group), 
+               label.padding=unit(0.1,"lines"),
+               label.size = 0, 
+               fontface="bold", color="darkred") +
+    scale_shape_manual(values = c(21:24)) +
+     scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+facet_wrap(~bookend) + 
+    theme(legend.position = 'none')
+```
+
+***Pairwise group comparisons.--***
+Initially, most treatments were different from each other on account of the treatments not being randomly assigned across blocks. 
+Only plant functional group composition in pastures in the two patch-burn grazing treatments were similar (Initial 2 burns/yr vs. final 2 burns/yr, P = `r pw[5,5]`). 
+Continuously-grazed pastures were different from those in the rotational grazing treatment (P = `r pw[7,7]`) and both PBG treatments (1 burn/yr, P = `r pw[6,5]`; 2 burns/yr, P = `r pw[6,6]`). 
+
+By the final year, plant functional group composition in PBG treatments had diverged (1 burn/yr vs. 2 burns/yr, P = `r pw[1,1]`). 
+Composition in both PBG treatments changed over the course of the study (1 burn/yr, P = `r pw[4,1]`; 2 burns/yr, P = `r pw[5,2]`). 
+
+But composition of continuously-grazed pastures was no different than when the study started (P = `r pw[6,3]`) and was not different from the final composition of rotationally-grazed pastures, either (P = `r pw[3,3]`). 
+Over the course of the study, composition of continuously-grazed pastures remained different than both PBG treatments (1 burn/yr, P = `r pw[2,1]`; 2 burns/yr, P = `r pw[2,2]`).
+
+Composition of rotationally-grazed pastures did shift over the course of the study (P = `r pw[7,4]`) and was different than both PBG treatments (1 burn/yr, P = `r pw[3,1]`; 2 burns/yr, P = `r pw[3,2]`).
+
+### Trajectory analysis 
+
+Arrows show how pasture centroids moved in ordination space from initial to final. 
+Only PBG pastures moved consistently within treatment groups; this movement was away from introduced plant groups and towards native groups. 
+General trend for Refuge pastures to increase towards native groups, as well, but to a lesser extent, consistent with univariate trends. 
+
+```{r trajectory}
+# Trajectory analysis  
+veg_scores$sites %>%
+  bind_cols(pasture = veg_d$pasture, .) %>%
+  pivot_longer(cols = c(MDS1, MDS2), 
+               names_to = 'axis', 
+               values_to = 'score') %>%
+  group_by(Trt, pasture, bookend, axis) %>%
+    summarize(centroid = mean(score), 
+              error = sd(score)/sqrt(n()),
+              .groups = 'drop') %>%
+  select(-error) %>%
+  pivot_wider(names_from = c(bookend, axis), 
+              values_from = centroid) %>%
+  ggplot() + theme_bw(16) + 
+  geom_segment(aes(x=Initial_MDS1, y=Initial_MDS2,
+                   xend=Final_MDS1, yend=Final_MDS2, 
+                   color=Trt), 
+               arrow = arrow(length = unit(0.03, "npc")),
+                 size=1.2)  +
+  geom_label(data=veg_scores$species %>%
+               filter(! group %in% c("IntWoody", "IntC4")), 
+             aes(x=MDS1*0.5, 
+                 y=MDS2*0.5, 
+                 label=group), 
+             label.padding=unit(0.1,"lines"),
+             label.size = 0, 
+             fontface="bold", color="darkred") +
+  coord_cartesian(xlim = c(-0.75, 2))  +   
+    labs(x="MDS Axis 1", 
+         y="MDS Axis 2") + 
+    geom_vline(xintercept = 0, lty=3, color="darkgrey") +
+    geom_hline(yintercept = 0, lty=3, color="darkgrey") +
+    theme(panel.grid=element_blank()) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) 
+```
+  
+### Beta diversity 
+
+Beta diversity is a measure of the area a group occupies in ordination space and can be interpreted as vegetation heterogeneity within groups. 
+Management practices meant to increase spatial heterogeneity should increase beta diversity, while practices meant to reduce spatial heterogeneity should also show lower beta diversity (tigher groups in ordination space). 
+
+Little effect was apparent over the course of the CGREC trials. 
+Pastures at the Refuge started at relatively high spatial heterogeneity, which fell in line with other pastures following four years of continuous grazing. 
+
+```{r beta_gg}
+# Plotting changes in beta dispersion
+  bind_cols(pasture = veg_d$pasture,
+            YrTrt = veg_d$YrTrt, 
+            disp = veg_scores$beta) %>% 
+    separate(YrTrt, into = c("bookend", "Management"), sep = '_') %>%
+    group_by(Management, bookend) %>%
+    summarize(DispMean = mean(disp), 
+              DispSE = sd(disp)/sqrt(n()), 
+              .groups = 'drop') %>%
+    mutate(bookend = factor(bookend, levels = c("Initial", "Final"))) %>%
+    ggplot(aes(x = bookend)) + theme_bw(16) + 
+    geom_line(aes(y = DispMean, 
+                  color = Management, 
+                  group = Management), 
+              position = position_dodge(width = 0.1)) +
+    geom_errorbar(aes(ymin = DispMean - DispSE, 
+                      ymax = DispMean + DispSE, 
+                      color = Management), 
+                  width = 0.25, 
+                  size = 1.1,
+                  position = position_dodge(width = 0.1)) +
+    geom_point(aes(y = DispMean, 
+                   shape = Management, 
+                   fill = Management), 
+               size = 3, stroke = 1.25,
+               position = position_dodge(width = 0.1)) + 
+    coord_cartesian(xlim = c(1.4,1.6)) + 
+    labs(x = "Data period", 
+         y = "Within-group diversity") +
+    scale_shape_manual(values = c(21:24)) +
+    scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) 
+```
+
+# Spatial heterogeneity 
+
+In this instance, *spatial heterogeneity* is defined as **patch contrast**--*the degree of difference among patches for several vegetation structure variables*. 
+Patch contrast is measured as the amount of variance attributable to the patch term in a random-effect linear regression model fit for each response variable. 
+
+Spatial heterogeneity tended to be greatest among PBG pastures with a single, 40-ac burn each spring. 
+Lowest heterogeneity tended to be among PBG pastures in which two burns were planned each year, but summer fires often did not occur. 
+Continuously-grazed pastures without fire tended to have low heterogeneity, while rotationally-grazed pastures generally increased in heterogeneity since the initiation of the treatment.
+
+```{r contrast_calc, eval=FALSE}
+veg_long <- 
+  veg_all %>%
+    pivot_longer(c(Bare:LitterDepth), 
+                 names_to = 'response', 
+                 values_to = 'values' ) 
+
+# Check distributions
+  veg_long %>% 
+  ggplot(aes(x=log(values+1))) + theme_bw(16) + 
+    geom_histogram(aes(y=..density..),      
+                   binwidth=0.1,
+                   colour="black",
+                   fill="lightgreen") + 
+    facet_wrap(~response, scales = 'free')
+
+# Patch contrast
+library(foreach)
+  foreach(r=1:length(unique(veg_long$response))) %:%
+  foreach(y=1:length(unique(veg_long$year))) %:%
+  foreach(p=1:length(unique(veg_long$pasture))) %do% {
+    d = filter(veg_long, 
+               response == unique(veg_long$response)[r],
+               year == unique(veg_long$year)[y], 
+               pasture == unique(veg_long$pasture)[p])
+    lme4::lmer(log(values + 1) ~ 
+                 (1|patch), 
+             data= d,
+             REML = FALSE) %>% 
+      lme4::VarCorr(. ) %>%
+      as_tibble() %>%
+      mutate(response = unique(d$response),
+             treatment = unique(d$TRT), 
+             pasture = unique(d$pasture), 
+             year = unique(d$year)) %>%
+      rename(term = grp, 
+             variance = sdcor) %>%
+      select(response, treatment, pasture, year, term, variance) %>%
+      bind_rows(contrastVOR) -> contrastVOR
+  }
+
+# save(contrastVOR, file = './data/contrastVOR.Rdata')
+```
+
+```{r contrast_gg, fig.width=8}
+contrastVOR %>%
+  pivot_wider(names_from = term, 
+              values_from = variance) %>%
+  group_by(response, treatment, year) %>%
+  summarize(PatchMean = mean(patch), 
+            PatchSE = sd(patch)/sqrt(n()), 
+            .groups = 'drop') %>%
+  mutate(response = recode(response, 
+                           Bare = 'Bare ground cover', 
+                           Dead = 'Litter cover', 
+                           LitterDepth = 'Litter depth', 
+                           Robel = 'Visual Obstruction')) %>% 
+  rename(Management = treatment) %>%
+  ggplot(aes(x = year, 
+             color = Management)) + theme_bw(14) + 
+    geom_path(aes(y = PatchMean), 
+              position = position_dodge(width = 0.1) ) + 
+    geom_errorbar(aes(ymin = PatchMean - PatchSE, 
+                      ymax = PatchMean + PatchSE), 
+                  width = 0.2, 
+                  position = position_dodge(width = 0.1)) + 
+    geom_point(aes(y = PatchMean, 
+                   fill = Management,
+                   shape = Management), 
+               size = 3, 
+               color = "black", 
+              position = position_dodge(width = 0.1) ) +
+  labs(x = 'Year', 
+       y = "Spatial heterogeneity") + 
+  scale_shape_manual(values = c(21:24)) + 
+  scale_color_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+  scale_fill_manual(values = wesanderson::wes_palette("Zissou1")[c(1:3,5)]) + 
+    facet_wrap(~response, scales = "free_y") +
+  theme(panel.grid.minor.x = element_blank())
+```
+
